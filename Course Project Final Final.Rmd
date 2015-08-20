@@ -1,0 +1,113 @@
+---
+title: "Practical Machine Learning Project"
+author: "Micaela"
+date: "August 18, 2015"
+output: html_document
+---
+###Overview
+The goal of the present analyses is to build a machine learning model that is able to predict, based on on-body sensor data, whether a participant did a bicep curl correctly (Class A), threw their elbows out in front (Class B), lifted the dumbbel only halfway (Class C), lowered the dumbbell halfway (Class D), or threw their hips to the front (Class E).  The reference for the training data is listed below.  The training data includes data from six participants who had sensors placed on their forearms, arms, belt, and dumbbells while they did 10 bicep curls from each of the five different classes.
+
+Reference for the data:
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz3jCsPudr4
+
+###Step 1. Read in Data
+```{r read in the data needed, echo=TRUE, cache=TRUE}
+if(!file.exists("./data")){dir.create("./data")}
+URL1 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+URL2 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv" #this is the data to use for the course submission
+download.file(URL1,"./data/training", method="curl")
+download.file(URL2, "./data/testing", method="curl")
+(dateDownloaded <- date())
+
+train_data <- read.csv("./data/training")
+test_data <- read.csv("./data/testing") #Not used in current analyses- used in submission part of course project
+```
+
+###Step 2. Create Training and Testing Datasets
+```{r partition, echo=TRUE, message=FALSE, warning=FALSE}
+library(caret)
+inTrain <- createDataPartition(y=train_data$classe, p=.7, list=FALSE) #Data split into training (70%) and testing (30%)
+training <- train_data[inTrain,]
+testing <- train_data[-inTrain,]
+```
+
+###Step 3. Pick Features
+Before picking features, let's look at the variables in the dataset and remove any variables that could be problematic due to missing values.
+
+```{r exploratory analyses, echo=TRUE, results='hide'}
+summary(training) #the training data has many variables with missing data
+
+#Remove columns with all of their data missing:
+na_col <- NULL
+for (i in 1:ncol(training)){
+  na_col[i] <- sum(is.na(training[,i]))
+  }
+training <- training[,names(training)[na_col==0]]
+
+#Remove "bookkeeping variables"
+subset <- training[,-(1:7)] #remove all bookkeeping variables
+summary(subset) #There are still a lot of variables with most of their values missing
+
+#Remove columns that have the majority of their data missing
+remove <- NULL
+#remove all variables with kurtosis, skewness, max, min, and amplitude in their names- they have large amounts of missing data
+for (i in c("kurtosis", "skewness", "max", "min","amplitude")){
+  remove <- c(remove, grep(paste("^",i,".",sep=""),names(subset)))
+  }
+subset <- subset[,-remove]
+```
+
+###Step 4. Run Prediction Models
+Since we are trying to predict a categorical variable (class), it makes sense to start with a classification tree algorithm (using 10-fold cross validation).
+
+```{r modelFit1, echo=TRUE, cache=TRUE}
+set.seed(1234)
+ctrl <- trainControl(method="cv",savePred=T)
+modelFit1 <- train(classe~.,data=subset, method="rpart", trControl=ctrl)
+modelFit1$finalModel
+modelFit1
+```
+
+The accuracy of Model 1 was only around 50%.  To improve accuracy, let's fit the same features to a random forest model.
+
+```{r random forest model 2, echo=TRUE, cache=TRUE, message=FALSE, warning=FALSE}
+modelFit2 <- train(classe~.,data=subset, method="rf", importance=TRUE, trControl=ctrl)
+modelFit2$finalModel
+modelFit2
+```
+
+Now accuracy is very good (99%).  Estimates of out-of-sample error rates from the 10-fold cross validation are nearly zero.  Comparing the accuracy between the classification tree model (Model1) and the random forest model (Model2) using the resamples function confirms the superior accuracy of Model2.
+
+```{r comparing models, echo=TRUE}
+resamps <- resamples(list(
+model1 = modelFit1,
+model2 = modelFit2))
+
+summary(resamps)
+```
+
+Given that both models included 52 features, it is interesting to look at which features are most important for accurate prediction.
+
+```{r importance1, echo=FALSE, message=FALSE, warning=FALSE}
+plot(varImp(modelFit2),top=10, main="Top 10 Features by Importance")
+```
+
+###Step 5. Apply the Best-Fitting Model to Test Data
+First all of the preprocessing steps used in the training data need to be repeated (removing bookkeeping variables and variables with large numbers of missing data)
+
+```{r preprocess test, echo=TRUE, warning=FALSE}
+testing <- testing[,names(testing)[na_col==0]]
+subset_test <- testing[,-(1:7)] #remove all bookkeeping variables
+subset_test <- subset_test[,-remove]
+```
+
+Now Model2 is fit to the 30% of the original dataset that was removed and became the test set.
+
+```{r apply to test, echo=TRUE, warning=FALSE}
+predictions <- predict(modelFit2,subset_test)
+confusionMatrix(predictions,subset_test$classe)
+```
+
+The fit in the testing data is also very good, with accuracy at 99% and out-of-sample error rate estimates less than 1%.  
